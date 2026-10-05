@@ -17,6 +17,16 @@ import AppKit
 import UniformTypeIdentifiers
 
 final class NativeTextView: NSTextView {
+    @objc func undo(_ sender: Any?) {
+        guard isEditable, !hasMarkedText(), undoManager?.canUndo == true else { return }
+        undoManager?.undo()
+    }
+
+    @objc func redo(_ sender: Any?) {
+        guard isEditable, !hasMarkedText(), undoManager?.canRedo == true else { return }
+        undoManager?.redo()
+    }
+
     // MARK: Frame & overscroll state
     var baseContentHeight: CGFloat = 0
     var activeBottomOverscroll: CGFloat = 0

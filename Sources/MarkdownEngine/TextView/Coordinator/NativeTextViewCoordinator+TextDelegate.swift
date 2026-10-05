@@ -31,6 +31,7 @@ extension NativeTextViewCoordinator {
     /// Returning the *same* instance for a given document on every call is
     /// required — a fresh manager per call breaks undo.
     public func undoManager(for view: NSTextView) -> UndoManager? {
+        if let sharedUndoManager { return sharedUndoManager }
         let key = documentId ?? "__default__"
         if let existing = undoManagers[key] {
             return existing
@@ -129,7 +130,7 @@ extension NativeTextViewCoordinator {
         // shouldChangeTextIn. Treat an in-flight undo/redo as structural when
         // it intersects an ordered run below; this preserves numbering while
         // ordinary content keystrokes retain their narrow paragraph scope.
-        let activeUndoManager = undoManagers[documentId ?? "__default__"]
+        let activeUndoManager = sharedUndoManager ?? undoManagers[documentId ?? "__default__"]
         let isUndoRedo = activeUndoManager?.isUndoing == true
             || activeUndoManager?.isRedoing == true
         guard !tv.hasMarkedText() else { return }
@@ -177,7 +178,8 @@ extension NativeTextViewCoordinator {
                 ) ?? WikiLinkService.makeStorageState(
                     from: docString,
                     existingMetadata: wikiLinkMetadata,
-                    textStorage: tv.textStorage
+                    textStorage: tv.textStorage,
+                    preserveSource: configuration.portableMarkdown
                 )
             }
             self.wikiLinkMetadata = storageState.metadata
@@ -191,16 +193,22 @@ extension NativeTextViewCoordinator {
                 let reference = WikiLinkService.makeStorageState(
                     from: docString,
                     existingMetadata: wikiLinkMetadata,
-                    textStorage: tv.textStorage
+                    textStorage: tv.textStorage,
+                    preserveSource: configuration.portableMarkdown
                 )
                 assert(reference.storage == storageState.storage,
                        "wiki incremental splice diverged from full rebuild")
             }
 #endif
             if storageState.storage != self.lastSyncedText {
+                if sharedUndoManager != nil {
+                    lastSyncedText = storageState.storage
+                    text = storageState.storage
+                } else {
                 DispatchQueue.main.async {
                     self.lastSyncedText = storageState.storage
                     self.text = storageState.storage
+                }
                 }
             }
         }
@@ -831,6 +839,7 @@ extension NativeTextViewCoordinator {
     }
 
     public func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
+        guard canEditSource?() != false else { return false }
         // ONE bridge of the pre-edit text — every `textView.string` read is an
         // O(doc) copy of the mutable backing store; this function used to take
         // four of them per keystroke.

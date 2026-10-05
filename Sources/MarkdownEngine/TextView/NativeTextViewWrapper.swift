@@ -71,6 +71,9 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
     public var documentId: String
     /// When `false` the editor renders read-only with no caret.
     public var isEditable: Bool
+    /// Portable hosts may own document-wide undo and commit input synchronously.
+    public var sharedUndoManager: UndoManager?
+    public var canEditSource: (() -> Bool)?
     /// Native integration hook, called once after the text view is configured.
     /// Embedders may attach responder-chain commands without naming engine types.
     public var onTextViewCreated: ((NSTextView) -> Void)?
@@ -170,6 +173,8 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         fontSize: CGFloat = 16,
         documentId: String = "default",
         isEditable: Bool = true,
+        sharedUndoManager: UndoManager? = nil,
+        canEditSource: (() -> Bool)? = nil,
         onTextViewCreated: ((NSTextView) -> Void)? = nil,
         onEditingAvailabilityChange: ((NSTextView, Bool) -> Void)? = nil,
         onPasteImage: ((NSPasteboard) -> String?)? = nil,
@@ -203,6 +208,8 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         self.fontSize = fontSize
         self.documentId = documentId
         self.isEditable = isEditable
+        self.sharedUndoManager = sharedUndoManager
+        self.canEditSource = canEditSource
         self.onTextViewCreated = onTextViewCreated
         self.onEditingAvailabilityChange = onEditingAvailabilityChange
         self.onPasteImage = onPasteImage
@@ -739,7 +746,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
             // Undo ranges refer to the previous disk revision. Do not replay
             // them against text loaded from another writer.
             textView.breakUndoCoalescing()
-            textView.undoManager?.removeAllActions()
+            if sharedUndoManager == nil { textView.undoManager?.removeAllActions() }
         }
         context.coordinator.rebuildTextStorageAndStyle(
             textView,
@@ -834,6 +841,8 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         )
         coordinator.onStandardLinkClick = onStandardLinkClick
         coordinator.documentId = documentId
+        coordinator.sharedUndoManager = sharedUndoManager
+        coordinator.canEditSource = canEditSource
         coordinator.onPersistScrollOffset = onPersistScrollOffset
         coordinator.onTextMutation = onTextMutation
         coordinator.restoreScrollOffset = restoreScrollOffset
