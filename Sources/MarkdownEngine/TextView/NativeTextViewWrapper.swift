@@ -740,8 +740,12 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         context.coordinator.fontSize = fontSize
         let externalReload = configuration.portableMarkdown && !isNodeSwitch
             && context.coordinator.didInitialFormatting && context.coordinator.lastSyncedText != text
-        let restoredSelection: NSRange? = externalReload
-            ? Self.selectionAfterReload(textView.selectedRange(), old: textView.string, new: text) : nil
+        // Replacing attributed storage also resets selection on presentation-only
+        // rebuilds. Preserve it whenever the portable document identity is stable.
+        let restoredSelection: NSRange? = configuration.portableMarkdown && !isNodeSwitch
+            ? (externalReload
+                ? Self.selectionAfterReload(textView.selectedRange(), old: textView.string, new: text)
+                : textView.selectedRange()) : nil
         if externalReload {
             // Undo ranges refer to the previous disk revision. Do not replay
             // them against text loaded from another writer.
