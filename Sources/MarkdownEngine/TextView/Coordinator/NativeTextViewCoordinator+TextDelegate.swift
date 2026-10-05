@@ -166,7 +166,8 @@ extension NativeTextViewCoordinator {
 
         if !wtActive {
             let storageState = PerfTrace.measure("wiki") {
-                WikiLinkService.updatedStorageState(
+                if configuration.portableMarkdown { return (storage: docString, metadata: [WikiLinkService.RangeKey: WikiLinkService.LinkMetadata]()) }
+                return WikiLinkService.updatedStorageState(
                     displayText: docString,
                     editedRange: editedRange,
                     changeInLength: lengthDelta,
@@ -920,7 +921,7 @@ extension NativeTextViewCoordinator {
         defer { PerfTrace.checkpoint("shouldOut") }
         return PerfTrace.measure("smartInput") {
             // Block LaTeX auto-wrap: insert newlines to keep $$ on its own line
-            if MarkdownInputHandler.handleBlockLatexAutoWrap(
+            if !configuration.portableMarkdown && MarkdownInputHandler.handleBlockLatexAutoWrap(
                 textView: textView,
                 affectedCharRange: affectedCharRange,
                 replacementString: replacementString,
@@ -929,7 +930,7 @@ extension NativeTextViewCoordinator {
                 return false
             }
 
-            if MarkdownInputHandler.handleImageEmbedAutoWrap(
+            if !configuration.portableMarkdown && MarkdownInputHandler.handleImageEmbedAutoWrap(
                 textView: textView,
                 affectedCharRange: affectedCharRange,
                 replacementString: replacementString,

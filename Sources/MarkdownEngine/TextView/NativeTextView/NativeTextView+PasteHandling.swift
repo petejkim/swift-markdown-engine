@@ -26,6 +26,15 @@ extension NativeTextView {
             return
         }
 
+        // MyNotesApp portable mode: insert exact Markdown/plain text without
+        // trimming whitespace, normalizing bullets, or adding table newlines.
+        if configuration.portableMarkdown,
+           let source = pasteboard.string(forType: MarkdownPasteboardWriter.markdownType)
+                ?? pasteboard.string(forType: .string) {
+            insertPasted(source, replacementRange: selectedRange())
+            return
+        }
+
         // Our own copy: prefer the private raw-markdown flavor so an in-app
         // copy→paste round-trips byte-exact. The derived HTML flavor is lossy
         // (e.g. the HTML renderer drops the `|UUID` of a wiki link), so this
@@ -63,7 +72,7 @@ extension NativeTextView {
             }
         }
 
-        if let fileText = textFromPastedFileURL(pasteboard: pasteboard) {
+        if !configuration.portableMarkdown, let fileText = textFromPastedFileURL(pasteboard: pasteboard) {
             let sanitized = sanitizePastedText(fileText)
             if !sanitized.isEmpty {
                 insertPreservingBlockquote(sanitized)
@@ -151,7 +160,7 @@ extension NativeTextView {
         if item.action == #selector(paste(_:)) {
             let pasteboard = NSPasteboard.general
             if PasteboardImageReader.canPasteImage(from: pasteboard) { return true }
-            if textFromPastedFileURL(pasteboard: pasteboard) != nil { return true }
+            if !configuration.portableMarkdown && textFromPastedFileURL(pasteboard: pasteboard) != nil { return true }
         }
         return super.validateUserInterfaceItem(item)
     }

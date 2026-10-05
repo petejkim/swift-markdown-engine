@@ -113,6 +113,7 @@ extension MarkdownStyler {
     // MARK: Image Embeds ![[Name]]
 
     static func styleImageEmbeds(_ ctx: StylingContext) -> [StyledRange] {
+        guard !ctx.configuration.portableMarkdown else { return [] }
         var attrs: [StyledRange] = []
         for (idx, token) in ctx.scoped(ctx.imageEmbedIndexed) {
             if MarkdownDetection.isInsideCodeBlock(range: token.range, codeTokens: ctx.codeTokens) { continue }

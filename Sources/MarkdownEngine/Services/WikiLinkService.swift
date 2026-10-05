@@ -63,8 +63,10 @@ public enum WikiLinkService {
     /// in the metadata). Unknown/empty/unsafe live names fall back to the stored label.
     public static func makeDisplayState(
         from storageText: String,
+        preserveSource: Bool = false,
         nameForID: ((String) -> String?)? = nil
     ) -> (display: String, metadata: [RangeKey: LinkMetadata]) {
+        if preserveSource { return (storageText, [:]) }
         let nsStorage = storageText as NSString
         let fullRange = NSRange(location: 0, length: nsStorage.length)
         var result = ""
@@ -127,8 +129,10 @@ public enum WikiLinkService {
     public static func makeStorageState(
         from displayText: String,
         existingMetadata: [RangeKey: LinkMetadata],
-        textStorage: NSTextStorage?
+        textStorage: NSTextStorage?,
+        preserveSource: Bool = false
     ) -> (storage: String, metadata: [RangeKey: LinkMetadata]) {
+        if preserveSource { return (displayText, [:]) }
         let nsDisplay = displayText as NSString
         // No `[[` anywhere → storage == display; skip the O(document) rebuild.
         if nsDisplay.range(of: "[[").location == NSNotFound {
@@ -325,4 +329,3 @@ public enum WikiLinkService {
         return NSRange(location: displayRange.location + displayFragment.length, length: 0)
     }
 }
-

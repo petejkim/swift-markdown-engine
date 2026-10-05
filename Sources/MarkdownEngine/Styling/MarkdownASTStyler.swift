@@ -933,13 +933,14 @@ enum MarkdownASTStyler {
     private static func styleWikiLink(
         range: NSRange, name: NSRange, markers: [NSRange], ctx: Ctx, into attrs: inout [StyledRange]
     ) {
+        guard !ctx.config.portableMarkdown else { return }
         attrs.append((range, [.spellingState: 0]))
         let nodeName = ctx.ns.substring(with: name)
         let linkID = ctx.wikiLinkID(range)
         var contentAttrs: [NSAttributedString.Key: Any] = [:]
         if let linkID { contentAttrs[.wikiLinkID] = linkID }
         if !ctx.isActive(range) {
-            // Resolve by the stable UUID when present 
+            // Resolve by the stable UUID when present
             let exists = ctx.config.services.wikiLinks.resolve(displayName: linkID ?? nodeName, range: name)?.exists ?? false
             if exists {
                 contentAttrs[.link] = linkID ?? nodeName
@@ -997,6 +998,7 @@ enum MarkdownASTStyler {
                 }
                 shrinkInlineMarkers(children, ctx: ctx, forceReveal: active, into: &attrs)
             case .wikiLink(let range, _, _, let markers):
+                if ctx.config.portableMarkdown { continue }
                 if !(forceReveal || ctx.isActive(range)) { shrink(markers, ctx: ctx, into: &attrs) }
             case .image(let range, _, _, let markers):
                 if !(forceReveal || ctx.isActive(range)) { shrink(markers, ctx: ctx, into: &attrs) }

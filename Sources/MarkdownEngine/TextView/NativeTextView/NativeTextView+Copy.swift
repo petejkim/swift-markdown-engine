@@ -21,6 +21,12 @@ extension NativeTextView {
             return
         }
         let raw = (string as NSString).substring(with: sel)
+        if configuration.portableMarkdown {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(raw, forType: .string)
+            NSPasteboard.general.setString(raw, forType: MarkdownPasteboardWriter.markdownType)
+            return
+        }
         MarkdownPasteboardWriter.write(markdown: raw, to: .general, extensions: configuration.extensions,
                                        directives: configuration.directives,
                                        directiveSettings: configuration.directiveSettings)

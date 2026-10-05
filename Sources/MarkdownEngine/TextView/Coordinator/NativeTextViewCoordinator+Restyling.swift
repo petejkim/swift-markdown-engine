@@ -37,7 +37,7 @@ extension NativeTextViewCoordinator {
             displayText = text
             wikiLinkMetadata = [:]
         } else {
-            let displayState = WikiLinkService.makeDisplayState(from: text) { services.wikiLinks.name(forID: $0) }
+            let displayState = WikiLinkService.makeDisplayState(from: text, preserveSource: configuration.portableMarkdown) { services.wikiLinks.name(forID: $0) }
             displayText = displayState.display
             wikiLinkMetadata = displayState.metadata
         }
