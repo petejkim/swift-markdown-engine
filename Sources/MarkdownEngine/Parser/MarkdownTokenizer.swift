@@ -12,6 +12,37 @@
 // only the code-block language helper.
 import Foundation
 
+/// Source-only resource discovery for embedders. Reuses the editor parser so
+/// code spans/fences and literal wiki embeds never request local image reads.
+public enum MarkdownSourceResources {
+    public static func linkDestination(in source: String, atUTF16 location: Int) -> String? {
+        let text = source as NSString
+        guard location >= 0, location < text.length,
+              let token = MarkdownTokenizer.parseTokensViaAST(in: source).first(where: {
+                  $0.kind == .link && NSLocationInRange(location, $0.range)
+              }), token.markerRanges.count >= 4 else { return nil }
+        let start = NSMaxRange(token.markerRanges[2])
+        let end = token.markerRanges[3].location
+        guard end > start, end <= text.length else { return nil }
+        return text.substring(with: NSRange(location: start, length: end - start))
+    }
+
+    public static func imageReferences(in source: String) -> [String] {
+        let text = source as NSString
+        var seen: Set<String> = []
+        var references: [String] = []
+        for token in MarkdownTokenizer.parseTokensViaAST(in: source) where token.kind == .imageLink {
+            guard token.markerRanges.count >= 4 else { continue }
+            let start = NSMaxRange(token.markerRanges[2])
+            let end = token.markerRanges[3].location
+            guard end > start, end <= text.length else { continue }
+            let reference = text.substring(with: NSRange(location: start, length: end - start))
+            if seen.insert(reference).inserted { references.append(reference) }
+        }
+        return references
+    }
+}
+
 // MARK: - Tokenizer
 enum MarkdownTokenizer {
 

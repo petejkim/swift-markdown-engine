@@ -908,16 +908,17 @@ enum MarkdownASTStyler {
     ) {
         attrs.append((range, [.spellingState: 0]))
         var urlString = ctx.ns.substring(with: urlRange)
-        if !urlString.contains("://") { urlString = "https://\(urlString)" }
+        if !ctx.config.portableMarkdown, !urlString.contains("://") { urlString = "https://\(urlString)" }
         let isActive = ctx.isActive(range)
-        if let url = URL(string: urlString) {
+        let target: Any? = ctx.config.portableMarkdown ? urlString : URL(string: urlString)
+        if let target {
             if isActive {
                 attrs.append((textRange, [
                     .foregroundColor: ctx.theme.link.withAlphaComponent(ctx.config.link.activeLinkAlpha),
                 ]))
             } else {
                 attrs.append((textRange, [
-                    .link: url,
+                    .link: target,
                     .underlineStyle: NSUnderlineStyle.single.rawValue,
                     .foregroundColor: ctx.theme.link,
                 ]))
@@ -1001,6 +1002,9 @@ enum MarkdownASTStyler {
                 if ctx.config.portableMarkdown { continue }
                 if !(forceReveal || ctx.isActive(range)) { shrink(markers, ctx: ctx, into: &attrs) }
             case .image(let range, _, _, let markers):
+                // The image-rendering pass hides source only after an authorized
+                // provider supplies an image. Missing/remote references stay legible.
+                if ctx.config.portableMarkdown { continue }
                 if !(forceReveal || ctx.isActive(range)) { shrink(markers, ctx: ctx, into: &attrs) }
             case .escape(let range, _, let marker):
                 if !(forceReveal || ctx.isActive(range)) { shrink([marker], ctx: ctx, into: &attrs) }

@@ -80,11 +80,18 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
     /// `"![[my-image]]"`) to insert at the caret, or `nil` to fall through
     /// to the system's default plain-text paste.
     public var onPasteImage: ((NSPasteboard) -> String?)?
+    /// Consume image paste/drop synchronously while the embedder starts an
+    /// asynchronous, scoped import. The range is expressed in source UTF-16.
+    public var onImageInput: ((NSPasteboard, NSTextView, NSRange) -> Bool)?
+    public var canReceiveImage: ((NSPasteboard) -> Bool)?
 
     /// Fires when the user clicks a `[[Name]]` link. The argument is the
     /// resolved opaque identifier (or the display name when no resolver
     /// was supplied).
     public var onLinkClick: ((String) -> Void)?
+    /// Portable Markdown destinations, unchanged from source. The embedder
+    /// resolves scoped file paths or explicitly opens an allowed web scheme.
+    public var onStandardLinkClick: ((String) -> Void)?
     /// Fires whenever the caret rect inside an active wiki-link changes,
     /// so embedders can position a follow-the-caret UI.
     public var onCaretRectChange: ((CGRect) -> Void)?
@@ -166,7 +173,10 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         onTextViewCreated: ((NSTextView) -> Void)? = nil,
         onEditingAvailabilityChange: ((NSTextView, Bool) -> Void)? = nil,
         onPasteImage: ((NSPasteboard) -> String?)? = nil,
+        onImageInput: ((NSPasteboard, NSTextView, NSRange) -> Bool)? = nil,
+        canReceiveImage: ((NSPasteboard) -> Bool)? = nil,
         onLinkClick: ((String) -> Void)? = nil,
+        onStandardLinkClick: ((String) -> Void)? = nil,
         onCaretRectChange: ((CGRect) -> Void)? = nil,
         onTextMutation: ((MarkdownTextMutation) -> Void)? = nil,
         onBuildContextMenu: ((NSMenu, NSRange) -> NSMenu)? = nil,
@@ -196,7 +206,10 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         self.onTextViewCreated = onTextViewCreated
         self.onEditingAvailabilityChange = onEditingAvailabilityChange
         self.onPasteImage = onPasteImage
+        self.onImageInput = onImageInput
+        self.canReceiveImage = canReceiveImage
         self.onLinkClick = onLinkClick
+        self.onStandardLinkClick = onStandardLinkClick
         self.onCaretRectChange = onCaretRectChange
         self.onTextMutation = onTextMutation
         self.onBuildContextMenu = onBuildContextMenu
@@ -313,6 +326,9 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         textView.isAutomaticDataDetectionEnabled = true
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.onPasteImage = onPasteImage
+        textView.onImageInput = onImageInput
+        textView.canReceiveImage = canReceiveImage
+        if onImageInput != nil { textView.registerForDraggedTypes(textView.registeredDraggedTypes + [.fileURL, .png, .tiff]) }
         if #available(macOS 15.1, *) {
             // `.limited` = the Writing Tools popover panel; `.complete` = the inline
             // experience that morphs the text with an animation. We use `.limited` so
@@ -351,6 +367,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
 
         context.coordinator.textView = textView
         context.coordinator.wikiLinkMetadata = initialState.metadata
+        context.coordinator.onStandardLinkClick = onStandardLinkClick
         context.coordinator.onCaretRectChange = onCaretRectChange
         context.coordinator.onTextMutation = onTextMutation
         context.coordinator.onBuildContextMenu = onBuildContextMenu
@@ -478,6 +495,8 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         }
 
         textView.onPasteImage = onPasteImage
+        textView.onImageInput = onImageInput
+        textView.canReceiveImage = canReceiveImage
         textView.isCursorExcluded = isCursorExcluded
         textView.setPlaceholder(placeholder)
         // Sync heightBehavior across all three layers (scroll view, text view,
@@ -746,6 +765,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
             context.coordinator.updateCodeBlockSelection(textView: textView)
         }
 
+        context.coordinator.onStandardLinkClick = onStandardLinkClick
         context.coordinator.onCaretRectChange = onCaretRectChange
         context.coordinator.onTextMutation = onTextMutation
         context.coordinator.onBuildContextMenu = onBuildContextMenu
@@ -781,6 +801,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
             onLinkClick: onLinkClick,
             onInlineSelectionChange: onInlineSelectionChange
         )
+        coordinator.onStandardLinkClick = onStandardLinkClick
         coordinator.documentId = documentId
         coordinator.onPersistScrollOffset = onPersistScrollOffset
         coordinator.onTextMutation = onTextMutation

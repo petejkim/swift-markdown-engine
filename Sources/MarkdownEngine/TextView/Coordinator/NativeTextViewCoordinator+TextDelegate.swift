@@ -1012,6 +1012,17 @@ extension NativeTextViewCoordinator {
                 }
             }
         }
+        if configuration.portableMarkdown {
+            // Consume every portable link here: neither AppKit nor the mouse
+            // fallback may open an unvalidated destination independently.
+            if let target = MarkdownSourceResources.linkDestination(in: textView.string, atUTF16: charIndex),
+               !textView.hasMarkedText(), textView.isEditable {
+                (textView as? NativeTextView)?.linkClickDidNavigate = true
+                let callback = onStandardLinkClick
+                DispatchQueue.main.async { callback?(target) }
+            }
+            return true
+        }
         guard let target = WikiLinkService.resolveIdentifier(link: link, textView: textView, at: charIndex) else {
             // Web link (URL-valued): returning false lets AppKit open the URL
             // (the mouseDown fallback mirrors that). Opening a link is navigation

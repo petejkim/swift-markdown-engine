@@ -131,7 +131,19 @@ enum InlineParser {
         claimed += scanEscapes(ns, len: len, claimed: &escapeIndex)
 
         var linkIndex = ClaimedIndex(claimed)
-        claimed += scanLinkFamily(ns, len: len, claimed: &linkIndex, registry: registry)
+        let escapes = Set(claimed.compactMap { span -> NSRange? in
+            if case .escape = span { return span.fullRange }; return nil
+        })
+        let links = scanLinkFamily(ns, len: len, claimed: &linkIndex, escapes: escapes, registry: registry)
+        var resourceIndex = ClaimedIndex(links.filter {
+            switch $0 { case .link, .image: return true; default: return false }
+        })
+        claimed.removeAll { span in
+            guard case .escape = span else { return false }
+            return resourceIndex.overlapping(span.fullRange).contains { rangeContains($0, span.fullRange) }
+        }
+        cost.claimedProbes += resourceIndex.probes
+        claimed += links
 
         var emphasisIndex = ClaimedIndex(claimed)
         let emphasis = resolveEmphasis(ns, len: len, claimed: &emphasisIndex)
@@ -307,16 +319,24 @@ enum InlineParser {
 
     // MARK: - 3. Link family / inline LaTeX / extension spans
 
-    private static func scanLinkFamily(_ ns: NSString, len: Int, claimed: inout ClaimedIndex, registry: ExtensionRegistry) -> [Span] {
+    private static func scanLinkFamily(_ ns: NSString, len: Int, claimed: inout ClaimedIndex, escapes: Set<NSRange>, registry: ExtensionRegistry) -> [Span] {
         // A candidate overlapping a claimed span is rejected, except for spans
         // wholly nested inside a Markdown link's label (#118). Only that case
         // needs the full overlap list; everything else short-circuits on the
         // first one.
         func hasDisallowedClaimedOverlap(_ span: Span) -> Bool {
-            guard case .link(_, let textRange, _, _) = span else {
+            switch span {
+            case .link(_, let textRange, _, _):
+                return claimed.overlapping(span.fullRange).contains {
+                    !rangeContains(textRange, $0) && !(escapes.contains($0) && rangeContains(span.fullRange, $0))
+                }
+            case .image:
+                return claimed.overlapping(span.fullRange).contains {
+                    !(escapes.contains($0) && rangeContains(span.fullRange, $0))
+                }
+            default:
                 return claimed.overlaps(span.fullRange)
             }
-            return claimed.overlapping(span.fullRange).contains { !rangeContains(textRange, $0) }
         }
         var spans: [Span] = []
         var i = 0
@@ -555,6 +575,7 @@ enum InlineParser {
         var k = from
         while k < len {
             let ch = ns.character(at: k)
+            if ch == backslash, k + 1 < len, isAsciiPunctuationChar(ns.character(at: k + 1)) { k += 2; continue }
             if ch == char { return k }
             if ch == newline { return nil }
             k += 1
@@ -567,6 +588,7 @@ enum InlineParser {
         var k = from
         while k < len {
             let ch = ns.character(at: k)
+            if ch == backslash, k + 1 < len, isAsciiPunctuationChar(ns.character(at: k + 1)) { k += 2; continue }
             if ch == newline { return nil }
             if ch == lparen { depth += 1 }
             else if ch == rparen { depth -= 1; if depth == 0 { return k } }

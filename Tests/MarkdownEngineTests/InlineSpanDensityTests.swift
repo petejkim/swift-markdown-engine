@@ -96,13 +96,17 @@ struct InlineSpanDensityTests {
         return String(fnv, radix: 16)
     }
 
-    @Test("the containment rewrite changes no tree in a 4000-input corpus")
+    // Portable resource parsing intentionally changes 15/4000 trees: images
+    // with escaped alt text now parse as images instead of a literal ! plus a
+    // link. Compared per input against 0.14.0 (5ed9dd8); all other trees match.
+    // Original upstream fingerprint: b74649ffbbbe237a.
+    @Test("the portable parser preserves the reviewed 4000-input corpus")
     func corpusFingerprint() {
         let registry = MarkdownEditorConfiguration(
             extensions: [HighlightExtension(), StrikethroughExtension()]
         ).extensionRegistry
 
-        #expect(fingerprint(corpus(4000), registry: registry) == "b74649ffbbbe237a")
+        #expect(fingerprint(corpus(4000), registry: registry) == "d2191c4eb6ef2142")
     }
 
     // MARK: - Cost curve, counted

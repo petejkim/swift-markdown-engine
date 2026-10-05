@@ -48,6 +48,8 @@ final class NativeTextView: NSTextView {
 
     // MARK: Editor wiring
     var onPasteImage: ((NSPasteboard) -> String?)?
+    var onImageInput: ((NSPasteboard, NSTextView, NSRange) -> Bool)?
+    var canReceiveImage: ((NSPasteboard) -> Bool)?
     weak var layoutBridge: LayoutBridge?
     var baseFont: NSFont = NSFont.systemFont(ofSize: NSFont.systemFontSize)
 

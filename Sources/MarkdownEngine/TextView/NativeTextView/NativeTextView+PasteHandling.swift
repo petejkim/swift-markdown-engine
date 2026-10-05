@@ -18,6 +18,8 @@ extension NativeTextView {
 
         let pasteboard = NSPasteboard.general
 
+        if onImageInput?(pasteboard, self, selectedRange()) == true { return }
+
         if let imageEmbed = onPasteImage?(pasteboard), !imageEmbed.isEmpty {
             insertBlockEmbed(imageEmbed)
             return
@@ -78,6 +80,30 @@ extension NativeTextView {
         }
 
         pasteAsPlainText(sender)
+    }
+
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        if canReceiveImage?(sender.draggingPasteboard) == true {
+            return isEditable && !hasMarkedText() ? .copy : []
+        }
+        return super.draggingEntered(sender)
+    }
+
+    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        if canReceiveImage?(sender.draggingPasteboard) == true {
+            return isEditable && !hasMarkedText() ? .copy : []
+        }
+        return super.draggingUpdated(sender)
+    }
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        if canReceiveImage?(sender.draggingPasteboard) == true {
+            guard isEditable, !hasMarkedText() else { return false }
+            let point = convert(sender.draggingLocation, from: nil)
+            let location = min((string as NSString).length, max(0, characterIndexForInsertion(at: point)))
+            return onImageInput?(sender.draggingPasteboard, self, NSRange(location: location, length: 0)) == true
+        }
+        return super.performDragOperation(sender)
     }
 
     override func pasteAsPlainText(_ sender: Any?) {
@@ -171,7 +197,8 @@ extension NativeTextView {
         }
         if item.action == #selector(paste(_:)) {
             let pasteboard = NSPasteboard.general
-            if PasteboardImageReader.canPasteImage(from: pasteboard) { return true }
+            if canReceiveImage?(pasteboard) == true { return true }
+            if !configuration.portableMarkdown, PasteboardImageReader.canPasteImage(from: pasteboard) { return true }
             if !configuration.portableMarkdown && textFromPastedFileURL(pasteboard: pasteboard) != nil { return true }
         }
         return super.validateUserInterfaceItem(item)
