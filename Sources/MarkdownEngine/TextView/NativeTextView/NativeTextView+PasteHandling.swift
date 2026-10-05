@@ -14,10 +14,7 @@ extension NativeTextView {
     ]
 
     override func paste(_ sender: Any?) {
-        guard isEditable else {
-            super.paste(sender)
-            return
-        }
+        guard isEditable, !hasMarkedText() else { return }
 
         let pasteboard = NSPasteboard.general
 
@@ -81,6 +78,15 @@ extension NativeTextView {
         }
 
         pasteAsPlainText(sender)
+    }
+
+    override func pasteAsPlainText(_ sender: Any?) {
+        guard isEditable, !hasMarkedText() else { return }
+        if configuration.portableMarkdown, let source = NSPasteboard.general.string(forType: .string) {
+            insertPasted(source, replacementRange: selectedRange())
+        } else {
+            super.pasteAsPlainText(sender)
+        }
     }
 
     /// Insert pasted content as its own coalescing-fenced undo step: the paste
@@ -157,6 +163,12 @@ extension NativeTextView {
     }
 
     override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        if hasMarkedText(), item.action == #selector(performFindPanelAction(_:)) || item.action == #selector(performTextFinderAction(_:)) {
+            return false
+        }
+        if item.action == #selector(paste(_:)) || item.action == #selector(pasteAsPlainText(_:)) {
+            guard isEditable, !hasMarkedText() else { return false }
+        }
         if item.action == #selector(paste(_:)) {
             let pasteboard = NSPasteboard.general
             if PasteboardImageReader.canPasteImage(from: pasteboard) { return true }

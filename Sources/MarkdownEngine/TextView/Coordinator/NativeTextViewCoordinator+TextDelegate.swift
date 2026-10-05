@@ -85,6 +85,7 @@ extension NativeTextViewCoordinator {
         pendingScrollRestoreDocumentId = nil
         // Before the early returns: the first keystroke must hide the placeholder.
         (tv as? NativeTextView)?.refreshPlaceholderVisibility()
+        (tv as? NativeTextView)?.reportEditingAvailability()
         // Raw mode: display IS storage — sync the binding, skip the restyle.
         if configuration.rawSourceMode {
             pendingEditCount = 0

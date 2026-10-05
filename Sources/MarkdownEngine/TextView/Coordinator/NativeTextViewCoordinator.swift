@@ -384,6 +384,11 @@ public final class NativeTextViewCoordinator: NSObject, NSTextViewDelegate {
                 self?.handleOrderedListNotification(notification)
             })
         }
+        if let name = bus.applyTaskListRequest {
+            busObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                self?.didMarkdownTaskList(notification)
+            })
+        }
         if let name = bus.applyLinkRequest {
             busObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
                 self?.handleLinkNotification(notification)

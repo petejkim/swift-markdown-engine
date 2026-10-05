@@ -87,6 +87,7 @@ final class NativeTextView: NSTextView {
     // setMarkedText skips textDidChange, so restyle the marked paragraph to apply markdown attrs.
     override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
         super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+        reportEditingAvailability()
         guard hasMarkedText(),
               let coord = delegate as? NativeTextViewCoordinator else { return }
         let marked = markedRange()
@@ -103,5 +104,49 @@ final class NativeTextView: NSTextView {
         coord.restyleParagraphs([paragraph], in: self)
     }
 
+    var onEditingAvailabilityChange: ((NSTextView, Bool) -> Void)?
+    private var lastEditingAvailability: Bool?
+
+    func reportEditingAvailability() {
+        // Responder changes finish after become/resign returns. Defer the SwiftUI
+        // callback as well, so representable updates never mutate view state.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let available = isEditable && window?.firstResponder === self && !hasMarkedText()
+            guard available != lastEditingAvailability else { return }
+            lastEditingAvailability = available
+            onEditingAvailabilityChange?(self, available)
+        }
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        reportEditingAvailability()
+        return accepted
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let accepted = super.resignFirstResponder()
+        reportEditingAvailability()
+        return accepted
+    }
+
+    override func unmarkText() {
+        super.unmarkText()
+        reportEditingAvailability()
+    }
+
     deinit { caretIndicatorObservation?.invalidate() }
+
+    // Do not let find actions unmark or move an in-progress input-method
+    // composition. The user can finish composing before invoking Find.
+    override func performFindPanelAction(_ sender: Any?) {
+        guard !hasMarkedText() else { return }
+        super.performFindPanelAction(sender)
+    }
+
+    override func performTextFinderAction(_ sender: Any?) {
+        guard !hasMarkedText() else { return }
+        super.performTextFinderAction(sender)
+    }
 }

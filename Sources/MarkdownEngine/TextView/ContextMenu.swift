@@ -136,7 +136,7 @@ extension NativeTextViewWrapper.Coordinator {
         retaining retained: NSRange,
         at newOffset: Int
     ) -> Bool {
-        guard let tv = textView, let storage = tv.textStorage else { return false }
+        guard let tv = textView, tv.isEditable, !tv.hasMarkedText(), let storage = tv.textStorage else { return false }
         guard tv.shouldChangeText(in: range, replacementString: newText) else { return false }
 
         let replacement = NSMutableAttributedString(string: newText, attributes: tv.typingAttributes)
@@ -154,7 +154,7 @@ extension NativeTextViewWrapper.Coordinator {
     }
 
     private func unwrapToken(_ token: MarkdownToken, leftReplacement: String, rightReplacement: String) {
-        guard let tv = textView else { return }
+        guard let tv = textView, tv.isEditable, !tv.hasMarkedText() else { return }
         let nsText = tv.string as NSString
         let content = nsText.substring(with: token.contentRange)
         let newText = leftReplacement + content + rightReplacement
@@ -164,8 +164,8 @@ extension NativeTextViewWrapper.Coordinator {
             retaining: token.contentRange,
             at: (leftReplacement as NSString).length
         ) else { return }
-        let newSelectionLocation = token.range.location + leftReplacement.count
-        tv.setSelectedRange(NSRange(location: newSelectionLocation, length: content.count))
+        let newSelectionLocation = token.range.location + leftReplacement.utf16.count
+        tv.setSelectedRange(NSRange(location: newSelectionLocation, length: content.utf16.count))
     }
 
     func isSelectionHeading(level: Int, in nsText: NSString, range: NSRange) -> Bool {
@@ -188,8 +188,63 @@ extension NativeTextViewWrapper.Coordinator {
         return line.hasPrefix("> ")
     }
 
+    private struct FormattingLine {
+        var indentation: String
+        var body: String
+        let terminator: String
+        var source: String { indentation + body + terminator }
+    }
+
+    /// Transform only selected physical lines, retaining indentation, trailing
+    /// whitespace, and each original line terminator. A selection ending at the
+    /// next line's start must not format that unselected line.
+    private func formatLines(_ transform: (inout [FormattingLine]) -> Void) {
+        guard let tv = textView, tv.isEditable, !tv.hasMarkedText() else { return }
+        let source = tv.string as NSString
+        let selection = tv.selectedRange()
+        let included = NSRange(location: selection.location, length: max(0, selection.length - 1))
+        let range = source.lineRange(for: included)
+        let original = source.substring(with: range) as NSString
+        var lines: [FormattingLine] = []
+        var offset = 0
+        repeat {
+            var end = 0
+            var contentsEnd = 0
+            original.getLineStart(nil, end: &end, contentsEnd: &contentsEnd,
+                                  for: NSRange(location: offset, length: 0))
+            let line = original.substring(with: NSRange(location: offset, length: contentsEnd - offset))
+            let indentation = String(line.prefix { $0 == " " || $0 == "\t" })
+            lines.append(FormattingLine(
+                indentation: indentation, body: String(line.dropFirst(indentation.count)),
+                terminator: original.substring(with: NSRange(location: contentsEnd, length: end - contentsEnd))))
+            offset = end
+        } while offset < original.length
+        transform(&lines)
+        let replacement = lines.map(\.source).joined()
+        guard replacement != original as String,
+              tv.shouldChangeText(in: range, replacementString: replacement) else { return }
+        tv.replaceCharacters(in: range, with: replacement)
+        tv.didChangeText()
+        // Keep the transformed lines selected for repeated format/toggle actions.
+        tv.setSelectedRange(NSRange(location: range.location, length: replacement.utf16.count))
+    }
+
+    private func applyPortableHeading(level: Int) {
+        guard (0...6).contains(level) else { return }
+        formatLines { lines in
+            for index in lines.indices {
+                var body = lines[index].body
+                if let marker = body.range(of: #"^#{1,6} "#, options: .regularExpression) {
+                    body.removeSubrange(marker)
+                }
+                lines[index].body = (level == 0 ? "" : String(repeating: "#", count: level) + " ") + body
+            }
+        }
+    }
+
     private func applyHeading(level: Int) {
-        guard let tv = textView else { return }
+        if configuration.portableMarkdown { applyPortableHeading(level: level); return }
+        guard let tv = textView, tv.isEditable, !tv.hasMarkedText() else { return }
         let nsText = tv.string as NSString
         let range = tv.selectedRange()
         let lineRange = nsText.lineRange(for: range)
@@ -216,7 +271,7 @@ extension NativeTextViewWrapper.Coordinator {
             retaining: retained,
             at: (prefix as NSString).length
         ) else { return }
-        let newSel = NSRange(location: lineRange.location + prefix.count, length: content.count)
+        let newSel = NSRange(location: lineRange.location + prefix.count, length: content.utf16.count)
         tv.setSelectedRange(newSel)
     }
 
@@ -224,8 +279,26 @@ extension NativeTextViewWrapper.Coordinator {
         applyHeading(level: sender.tag)
     }
 
+    private func applyPortableList(prefix: String) {
+        formatLines { lines in
+            let removes = lines.allSatisfy { $0.body.hasPrefix(prefix) }
+            for index in lines.indices {
+                if removes {
+                    lines[index].body.removeFirst(prefix.count)
+                } else if !lines[index].body.hasPrefix(prefix) {
+                    // Change an existing list style without stacking markers.
+                    if let marker = lines[index].body.range(of: #"^(?:[-+*] |[0-9]+[.)] )"#, options: .regularExpression) {
+                        lines[index].body.removeSubrange(marker)
+                    }
+                    lines[index].body = prefix + lines[index].body
+                }
+            }
+        }
+    }
+
     private func applyList(prefix: String) {
-        guard let tv = textView else { return }
+        if configuration.portableMarkdown { applyPortableList(prefix: prefix); return }
+        guard let tv = textView, tv.isEditable, !tv.hasMarkedText() else { return }
         let nsText = tv.string as NSString
         let selRange = tv.selectedRange()
         let startLine = nsText.lineRange(for: selRange)
@@ -250,7 +323,7 @@ extension NativeTextViewWrapper.Coordinator {
             retaining: retained,
             at: (prefix as NSString).length
         ) else { return }
-        let newSel = NSRange(location: startLine.location + prefix.count, length: content.count)
+        let newSel = NSRange(location: startLine.location + prefix.count, length: content.utf16.count)
         tv.setSelectedRange(newSel)
     }
 
@@ -262,8 +335,25 @@ extension NativeTextViewWrapper.Coordinator {
         applyList(prefix: "1. ")
     }
 
+    @objc func didMarkdownTaskList(_ sender: Any?) {
+        formatLines { lines in
+            let pattern = #"^[-+*] \[[ xX]\] "#
+            let removes = lines.allSatisfy { $0.body.range(of: pattern, options: .regularExpression) != nil }
+            for index in lines.indices {
+                if let marker = lines[index].body.range(of: pattern, options: .regularExpression) {
+                    if removes { lines[index].body.removeSubrange(marker) }
+                } else {
+                    if let marker = lines[index].body.range(of: #"^(?:[-+*] |[0-9]+[.)] )"#, options: .regularExpression) {
+                        lines[index].body.removeSubrange(marker)
+                    }
+                    lines[index].body = "- [ ] " + lines[index].body
+                }
+            }
+        }
+    }
+
     @objc func didMarkdownBold(_ sender: Any?) {
-        guard let tv = textView else { return }
+        guard let tv = textView, tv.isEditable, !tv.hasMarkedText() else { return }
         let range = tv.selectedRange()
 
         if let token = enclosingBoldToken(for: range, in: tv.string) {
@@ -288,7 +378,7 @@ extension NativeTextViewWrapper.Coordinator {
     }
 
     @objc func didMarkdownItalic(_ sender: Any?) {
-        guard let tv = textView else { return }
+        guard let tv = textView, tv.isEditable, !tv.hasMarkedText() else { return }
         let range = tv.selectedRange()
 
         if let token = enclosingItalicToken(for: range, in: tv.string) {
@@ -313,7 +403,7 @@ extension NativeTextViewWrapper.Coordinator {
     }
 
     @objc func didMarkdownHighlight(_ sender: Any?) {
-        guard let tv = textView else { return }
+        guard let tv = textView, tv.isEditable, !tv.hasMarkedText() else { return }
         let range = tv.selectedRange()
 
         if let token = enclosingHighlightToken(for: range, in: tv.string) {
@@ -330,7 +420,7 @@ extension NativeTextViewWrapper.Coordinator {
     }
 
     @objc func didMarkdownStrikethrough(_ sender: Any?) {
-        guard let tv = textView else { return }
+        guard let tv = textView, tv.isEditable, !tv.hasMarkedText() else { return }
         let range = tv.selectedRange()
 
         if let token = enclosingToken(of: .extensionSpan(StrikethroughExtension.identifier), for: range, in: tv.string) {
@@ -353,7 +443,7 @@ extension NativeTextViewWrapper.Coordinator {
     }
 
     @objc func didMarkdownInlineCode(_ sender: Any?) {
-        guard let tv = textView else { return }
+        guard let tv = textView, tv.isEditable, !tv.hasMarkedText() else { return }
         let range = tv.selectedRange()
 
         if let token = enclosingToken(of: .inlineCode, for: range, in: tv.string) {
@@ -378,8 +468,19 @@ extension NativeTextViewWrapper.Coordinator {
     /// Toggles the `> ` prefix by editing only the prefix, leaving every
     /// attribute on the rest of the line untouched. It used to replace the whole
     /// line to add two characters, which is how it stripped wiki-link UUIDs.
+    private func applyPortableBlockquote(_ sender: Any?) {
+        formatLines { lines in
+            let removes = lines.allSatisfy { $0.body.hasPrefix("> ") }
+            for index in lines.indices {
+                if removes { lines[index].body.removeFirst(2) }
+                else { lines[index].body = "> " + lines[index].body }
+            }
+        }
+    }
+
     @objc func didMarkdownBlockquote(_ sender: Any?) {
-        guard let tv = textView else { return }
+        if configuration.portableMarkdown { applyPortableBlockquote(sender); return }
+        guard let tv = textView, tv.isEditable, !tv.hasMarkedText() else { return }
         let nsText = tv.string as NSString
         let range = tv.selectedRange()
         let lineRange = nsText.lineRange(for: range)
@@ -404,7 +505,7 @@ extension NativeTextViewWrapper.Coordinator {
     }
 
     @objc func didMarkdownLink(_ sender: Any?) {
-        guard let tv = textView else { return }
+        guard let tv = textView, tv.isEditable, !tv.hasMarkedText() else { return }
         let range = tv.selectedRange()
         let url = (sender as? NSNotification)?.userInfo?["url"] as? String ?? ""
 
@@ -419,7 +520,7 @@ extension NativeTextViewWrapper.Coordinator {
                 retaining: range,
                 at: 1 // past the opening "["
             ) else { return }
-            tv.setSelectedRange(NSRange(location: range.location + newText.count, length: 0))
+            tv.setSelectedRange(NSRange(location: range.location + newText.utf16.count, length: 0))
         } else {
             let insertion = "[](\(url))"
             if tv.shouldChangeText(in: range, replacementString: insertion) {
@@ -431,7 +532,7 @@ extension NativeTextViewWrapper.Coordinator {
     }
 
     @objc func didMarkdownCodeBlock(_ sender: Any?) {
-        guard let tv = textView else { return }
+        guard let tv = textView, tv.isEditable, !tv.hasMarkedText() else { return }
         let range = tv.selectedRange()
         let nsText = tv.string as NSString
         let lineRange = nsText.lineRange(for: range)
@@ -446,7 +547,7 @@ extension NativeTextViewWrapper.Coordinator {
     }
 
     @objc func didMarkdownHorizontalRule(_ sender: Any?) {
-        guard let tv = textView else { return }
+        guard let tv = textView, tv.isEditable, !tv.hasMarkedText() else { return }
         let range = tv.selectedRange()
         let nsText = tv.string as NSString
         let lineRange = nsText.lineRange(for: range)
@@ -455,20 +556,20 @@ extension NativeTextViewWrapper.Coordinator {
         if tv.shouldChangeText(in: range, replacementString: insertion) {
             tv.replaceCharacters(in: range, with: insertion)
             tv.didChangeText()
-            let cursorLoc = range.location + insertion.count
+            let cursorLoc = range.location + insertion.utf16.count
             tv.setSelectedRange(NSRange(location: cursorLoc, length: 0))
         }
     }
 
     @objc func didMarkdownImage(_ sender: Any?) {
-        guard let tv = textView else { return }
+        guard let tv = textView, tv.isEditable, !tv.hasMarkedText() else { return }
         let range = tv.selectedRange()
         let url = (sender as? NSNotification)?.userInfo?["url"] as? String ?? ""
         let insertion = "![](\(url))"
         if tv.shouldChangeText(in: range, replacementString: insertion) {
             tv.replaceCharacters(in: range, with: insertion)
             tv.didChangeText()
-            tv.setSelectedRange(NSRange(location: range.location + insertion.count, length: 0))
+            tv.setSelectedRange(NSRange(location: range.location + insertion.utf16.count, length: 0))
         }
     }
 
@@ -476,7 +577,7 @@ extension NativeTextViewWrapper.Coordinator {
     /// offset within the original text. For example `wo|rd` with `**`
     /// becomes `**wo|rd**`.
     private func wrapWordRange(_ range: NSRange, with marker: String, cursorOffset: Int) {
-        guard let tv = textView else { return }
+        guard let tv = textView, tv.isEditable, !tv.hasMarkedText() else { return }
         let nsText = tv.string as NSString
         let original = nsText.substring(with: range)
         let newText = marker + original + marker
@@ -490,7 +591,7 @@ extension NativeTextViewWrapper.Coordinator {
     }
 
     private func insertEmptyMarkers(_ marker: String) {
-        guard let tv = textView else { return }
+        guard let tv = textView, tv.isEditable, !tv.hasMarkedText() else { return }
         let range = tv.selectedRange()
         let insertion = marker + marker
         if tv.shouldChangeText(in: range, replacementString: insertion) {
@@ -501,17 +602,15 @@ extension NativeTextViewWrapper.Coordinator {
     }
 
     private func wrapSelection(with marker: String) {
-        guard let tv = textView else { return }
+        guard let tv = textView, tv.isEditable, !tv.hasMarkedText() else { return }
         let nsText = tv.string as NSString
         let range = tv.selectedRange()
         let original = nsText.substring(with: range)
-        let leadingWS = original.prefix { $0.isWhitespace }.count
-        let trailingWS = original.reversed().prefix { $0.isWhitespace }.count
-        let coreStart = original.index(original.startIndex, offsetBy: leadingWS)
-        let coreEnd = original.index(original.endIndex, offsetBy: -trailingWS)
-        let core = coreStart <= coreEnd ? String(original[coreStart..<coreEnd]) : ""
-        let leading = String(original[..<coreStart])
-        let trailing = String(original[coreEnd...])
+        let leading = String(original.prefix { $0.isWhitespace })
+        let remainder = original.dropFirst(leading.count)
+        let trailing = String(remainder.reversed().prefix { $0.isWhitespace }.reversed())
+        let core = String(remainder.dropLast(trailing.count))
+        let leadingWS = leading.utf16.count
         let newText = leading + marker + core + marker + trailing
         // Only the markers are new; `core` is the user's text and keeps its
         // attributes, including a wiki link's UUID if the selection spans one.
@@ -523,7 +622,7 @@ extension NativeTextViewWrapper.Coordinator {
             retaining: coreOldRange,
             at: (leading as NSString).length + (marker as NSString).length
         ) else { return }
-        let newRange = NSRange(location: range.location + leadingWS + marker.count, length: core.count)
+        let newRange = NSRange(location: range.location + leadingWS + marker.count, length: core.utf16.count)
         tv.setSelectedRange(newRange)
     }
 }

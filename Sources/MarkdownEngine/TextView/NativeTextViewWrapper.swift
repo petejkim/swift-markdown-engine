@@ -71,6 +71,11 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
     public var documentId: String
     /// When `false` the editor renders read-only with no caret.
     public var isEditable: Bool
+    /// Native integration hook, called once after the text view is configured.
+    /// Embedders may attach responder-chain commands without naming engine types.
+    public var onTextViewCreated: ((NSTextView) -> Void)?
+    /// Reports whether this view is focused, editable, and not composing marked text.
+    public var onEditingAvailabilityChange: ((NSTextView, Bool) -> Void)?
     /// Optional paste hook. Return a Markdown image-embed string (e.g.
     /// `"![[my-image]]"`) to insert at the caret, or `nil` to fall through
     /// to the system's default plain-text paste.
@@ -158,6 +163,8 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         fontSize: CGFloat = 16,
         documentId: String = "default",
         isEditable: Bool = true,
+        onTextViewCreated: ((NSTextView) -> Void)? = nil,
+        onEditingAvailabilityChange: ((NSTextView, Bool) -> Void)? = nil,
         onPasteImage: ((NSPasteboard) -> String?)? = nil,
         onLinkClick: ((String) -> Void)? = nil,
         onCaretRectChange: ((CGRect) -> Void)? = nil,
@@ -186,6 +193,8 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         self.fontSize = fontSize
         self.documentId = documentId
         self.isEditable = isEditable
+        self.onTextViewCreated = onTextViewCreated
+        self.onEditingAvailabilityChange = onEditingAvailabilityChange
         self.onPasteImage = onPasteImage
         self.onLinkClick = onLinkClick
         self.onCaretRectChange = onCaretRectChange
@@ -275,7 +284,9 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         textView.minOverscrollPoints = configuration.overscroll.minPoints
         context.coordinator.configuration = configuration
         textView.insertionPointColor = configuration.theme.bodyText
+        textView.onEditingAvailabilityChange = onEditingAvailabilityChange
         textView.isEditable = isEditable
+        textView.reportEditingAvailability()
         textView.isSelectable = true
         textView.isRichText = true
         let initialState = WikiLinkService.makeDisplayState(from: text, preserveSource: configuration.portableMarkdown) { configuration.services.wikiLinks.name(forID: $0) }
@@ -404,6 +415,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
             context.coordinator.updateCodeBlockSelection(textView: textView)
         }
         reconcileHeader(textView: textView, context: context)
+        onTextViewCreated?(textView)
         return scrollView
     }
 
@@ -569,7 +581,9 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
                 context.coordinator.restyleParagraphs([fullRange], in: textView)
             }
         }
+        textView.onEditingAvailabilityChange = onEditingAvailabilityChange
         textView.isEditable = isEditable
+        textView.reportEditingAvailability()
         textView.isSelectable = true
         // Keep the caret ink the selection handler resolved (an extension span
         // can invert it); a plain bodyText reset here stomps it on every pass.
@@ -667,11 +681,22 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         // reads the current values from the View struct.
         context.coordinator.fontName = fontName
         context.coordinator.fontSize = fontSize
+        let externalReload = configuration.portableMarkdown && !isNodeSwitch
+            && context.coordinator.didInitialFormatting && context.coordinator.lastSyncedText != text
+        let restoredSelection: NSRange? = externalReload
+            ? Self.selectionAfterReload(textView.selectedRange(), old: textView.string, new: text) : nil
+        if externalReload {
+            // Undo ranges refer to the previous disk revision. Do not replay
+            // them against text loaded from another writer.
+            textView.breakUndoCoalescing()
+            textView.undoManager?.removeAllActions()
+        }
         context.coordinator.rebuildTextStorageAndStyle(
             textView,
             from: text,
             invalidateLayout: isNodeSwitch || rawSourceModeChanged
         )
+        if let restoredSelection { textView.setSelectedRange(restoredSelection) }
         textView.recalcOverscroll(for: nsView)
         (nsView as? ClampedScrollView)?.clampToInsets()
         // Height is measured now, so restore the saved offset; clampToInsets keeps
@@ -729,6 +754,22 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         context.coordinator.onDirectiveCompletion = onDirectiveCompletion
         context.coordinator.onCodeBlockSelectionChange = onCodeBlockSelectionChange
         context.coordinator.didInitialFormatting = true
+    }
+
+    private static func selectionAfterReload(_ range: NSRange, old: String, new: String) -> NSRange {
+        let before = Array(old.utf16)
+        let after = Array(new.utf16)
+        var prefix = 0
+        while prefix < min(before.count, after.count), before[prefix] == after[prefix] { prefix += 1 }
+        var suffix = 0
+        while suffix < min(before.count, after.count) - prefix,
+              before[before.count - suffix - 1] == after[after.count - suffix - 1] { suffix += 1 }
+        if NSMaxRange(range) <= prefix { return range }
+        if range.location >= before.count - suffix {
+            return NSRange(location: max(0, range.location + after.count - before.count), length: range.length)
+        }
+        // The selection intersects changed source; keep a valid insertion point.
+        return NSRange(location: min(range.location, after.count), length: 0)
     }
 
     public func makeCoordinator() -> Coordinator {
