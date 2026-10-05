@@ -37,6 +37,7 @@ struct ClampedScrollViewElasticityTests {
     }
 
     /// Every bounds origin the clip view commits, in order.
+    @MainActor
     private final class BoundsRecorder: NSObject {
         private(set) var origins: [CGFloat] = []
         init(_ clip: NSClipView) {
