@@ -80,9 +80,9 @@ enum MarkdownASTStyler {
         shrinkInactiveMarkers(in: blocks, ctx: ctx, into: &attrs)
 
         // Text/regex passes (AST-agnostic); AST code ranges drive the "skip inside code" checks.
-        let codeRanges = collectCodeRanges(in: blocks)
-        let checkboxRanges = collectCheckboxRanges(in: blocks)
-        let linkRanges = collectLinkRanges(in: blocks)
+        let codeRanges = RangeIndex(collectCodeRanges(in: blocks))
+        let checkboxRanges = RangeIndex(collectCheckboxRanges(in: blocks))
+        let linkRanges = RangeIndex(collectLinkRanges(in: blocks))
         styleAutoLinks(ctx: ctx, codeRanges: codeRanges, linkRanges: linkRanges, into: &attrs)
         styleIncompleteLinkBrackets(ctx: ctx, codeRanges: codeRanges, checkboxRanges: checkboxRanges, into: &attrs)
         return attrs
@@ -118,8 +118,34 @@ enum MarkdownASTStyler {
         return ranges
     }
 
-    private static func isInCode(_ range: NSRange, _ codeRanges: [NSRange]) -> Bool {
-        codeRanges.contains { NSIntersectionRange($0, range).length > 0 }
+    /// Sorted, merged ranges avoid scanning every code span for every bracket
+    /// or detected URL. Full-document restyling must scale with source size.
+    private struct RangeIndex {
+        let ranges: [NSRange]
+
+        init(_ input: [NSRange]) {
+            var merged: [NSRange] = []
+            for range in input.filter({ $0.length > 0 }).sorted(by: { $0.location < $1.location }) {
+                if let previous = merged.last, range.location <= NSMaxRange(previous) {
+                    merged[merged.count - 1].length = max(NSMaxRange(previous), NSMaxRange(range)) - previous.location
+                } else {
+                    merged.append(range)
+                }
+            }
+            ranges = merged
+        }
+
+        func intersects(_ range: NSRange) -> Bool {
+            guard range.length > 0 else { return false }
+            var lower = 0
+            var upper = ranges.count
+            while lower < upper {
+                let middle = lower + (upper - lower) / 2
+                if NSMaxRange(ranges[middle]) <= range.location { lower = middle + 1 }
+                else { upper = middle }
+            }
+            return lower < ranges.count && ranges[lower].location < NSMaxRange(range)
+        }
     }
 
     /// Full ranges of markdown links `[text](url)` and wiki links `[[…]]`. The NSDataDetector
@@ -553,21 +579,21 @@ enum MarkdownASTStyler {
         }
     }
 
-    private static func styleAutoLinks(ctx: Ctx, codeRanges: [NSRange], linkRanges: [NSRange], into attrs: inout [StyledRange]) {
+    private static func styleAutoLinks(ctx: Ctx, codeRanges: RangeIndex, linkRanges: RangeIndex, into attrs: inout [StyledRange]) {
         guard let detector = autoLinkDetector else { return }
         for scan in ctx.scanRanges {
             detector.enumerateMatches(in: ctx.text, range: scan) { match, _, _ in
                 // Skip URLs inside code and inside a markdown/wiki link's own range — a link's
                 // `(url)` must not become a second `.link` region competing with the link itself.
                 guard let match, let url = match.url,
-                      !isInCode(match.range, codeRanges),
-                      !isInCode(match.range, linkRanges) else { return }
+                      !codeRanges.intersects(match.range),
+                      !linkRanges.intersects(match.range) else { return }
                 attrs.append((match.range, [.link: url]))
             }
         }
     }
 
-    private static func styleIncompleteLinkBrackets(ctx: Ctx, codeRanges: [NSRange], checkboxRanges: [NSRange], into attrs: inout [StyledRange]) {
+    private static func styleIncompleteLinkBrackets(ctx: Ctx, codeRanges: RangeIndex, checkboxRanges: RangeIndex, into attrs: inout [StyledRange]) {
         // Every pattern starts with `\[`, so no `[` in the text ⇒ no match: skip
         // all 6 regex sweeps (the 78ms on hits=0 docs).
         guard ctx.ns.range(of: "[").location != NSNotFound else { return }
@@ -576,7 +602,7 @@ enum MarkdownASTStyler {
         for re in incompleteLinkPatterns {
             for scan in ctx.scanRanges {
               for m in re.matches(in: ctx.text, options: [], range: scan)
-                  where !isInCode(m.range, codeRanges) && !isInCode(m.range, checkboxRanges) {
+                  where !codeRanges.intersects(m.range) && !checkboxRanges.intersects(m.range) {
                 // One range per RUN of same-colored characters, not per character: a
                 // single `[Design System]` used to emit 15 ranges, and the note in the
                 // bug report reached 25,504 from this pass alone — every one of them a

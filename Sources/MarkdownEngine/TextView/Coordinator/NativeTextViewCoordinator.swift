@@ -69,6 +69,7 @@ public final class NativeTextViewCoordinator: NSObject, NSTextViewDelegate {
     var lastImageFingerprint: AnyHashable?
     var lastWikiFingerprint: AnyHashable?
     private var busObservers: [NSObjectProtocol] = []
+    var viewportObservers: [NSObjectProtocol] = []
     private var registeredAppearanceObserverName: Notification.Name?
     weak var textView: NSTextView?
     /// Owns the scroll-away header (build, content refresh, collapse/expand,
@@ -478,6 +479,7 @@ public final class NativeTextViewCoordinator: NSObject, NSTextViewDelegate {
     deinit {
         NotificationCenter.default.removeObserver(self)
         busObservers.forEach(NotificationCenter.default.removeObserver(_:))
+        viewportObservers.forEach(NotificationCenter.default.removeObserver(_:))
     }
 }
 

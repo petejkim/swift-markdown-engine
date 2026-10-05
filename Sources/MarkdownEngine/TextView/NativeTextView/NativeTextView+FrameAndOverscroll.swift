@@ -24,6 +24,12 @@ extension NativeTextView {
     ) {
         scrollView.contentInsets.bottom = 0
 
+        // SwiftUI creates the representable before assigning its viewport.
+        // Measuring a whole note at zero wrap width lays it out character by
+        // character, then immediately repeats the work at the real width.
+        guard scrollView.contentView.bounds.width > textContainerInset.width * 2,
+              bounds.width > textContainerInset.width * 2 else { return }
+
         let lineHeight = layoutBridgeDefaultLineHeight(for: self.baseFont, using: layoutBridge)
         // File switch/resize forces full layout until height settles; typing stays O(edit).
         if debugTag == "?" { pendingFullLayoutMeasure = true }
@@ -189,7 +195,31 @@ extension NativeTextView {
 
     /// Fixed reading-column width = wrap width + horizontal insets on both sides.
     var readingColumnWidth: CGFloat {
-        (configuration.readingWidth ?? 0) + configuration.textInsets.horizontal * 2
+        let desired = (configuration.readingWidth ?? 0) + configuration.textInsets.horizontal * 2
+        guard configuration.portableMarkdown, let width = enclosingScrollView?.contentView.bounds.width, width > 0 else { return desired }
+        return min(desired, width)
+    }
+
+    /// Refresh the existing native column; preferences never replace the text
+    /// view or its undo manager. Portable columns fit inside narrow windows.
+    func synchronizeReadingWidth(forClipWidth width: CGFloat) {
+        guard let container = textContainer, let scrollView = enclosingScrollView else { return }
+        let inset = configuration.textInsets.horizontal * 2
+        let wrap = configuration.readingWidth.map {
+            configuration.portableMarkdown && width > 0 ? max(1, min($0, width - inset)) : $0
+        }
+        container.widthTracksTextView = wrap == nil
+        if let wrap { container.size = NSSize(width: wrap, height: .greatestFiniteMagnitude) }
+        pendingFullLayoutMeasure = true
+        if let manager = textLayoutManager { manager.invalidateLayout(for: manager.documentRange) }
+        recalcOverscroll(for: scrollView, targetWidth: width)
+        if wrap != nil { centerReadingColumn(forClipWidth: width) }
+        else { setFrameOrigin(NSPoint(x: 0, y: frame.origin.y)) }
+        if let coordinator = delegate as? NativeTextViewCoordinator {
+            let tables = coordinator.parsedDocument(for: string).tokens.filter { $0.kind == .table }.map(\.range)
+            if !tables.isEmpty { coordinator.restyleParagraphs(tables, in: self) }
+        }
+        updateWideTableOverlays()
     }
 
     func applyManagedFrameSize(width: CGFloat) {
@@ -373,12 +403,9 @@ extension NativeTextView {
             propagateCaretRevealToEnclosingScroller(range: range)
             return
         }
-        // Only the reading column needs manual reveal; default keeps AppKit's native implementation.
-        guard configuration.readingWidth != nil else {
-            super.scrollRangeToVisible(range)
-            return
-        }
-        // Explicit reveal: native scrollRangeToVisible can't position the container's centered subview.
+        // Both full-width and centered text live inside NativeTextViewContainer.
+        // AppKit's default reveal leaves this nested TextKit view at its old
+        // scroll position, so convert the caret geometry for either width.
         // A caret at the document end has no fragment at its location; step back one
         // char there so the last line's fragment is found (else nothing reveals).
         let docLength = (self.string as NSString).length
@@ -388,6 +415,13 @@ extension NativeTextView {
               let start = tlm.textContentManager?.location(tlm.documentRange.location, offsetBy: revealOffset) else {
             super.scrollRangeToVisible(range)
             return
+        }
+        // An off-screen fragment can still have an estimated Y after a style
+        // change. Resolve layout and the container height before a distant
+        // jump. Ordinary typing inside the current viewport stays incremental.
+        if tlm.textViewportLayoutController.viewportRange?.contains(start) != true {
+            pendingFullLayoutMeasure = true
+            recalcOverscroll(for: scrollView, debugTag: "caretReveal")
         }
         tlm.enumerateTextLayoutFragments(from: start, options: [.ensuresLayout]) { fragment in
             let cv = scrollView.contentView
@@ -415,7 +449,8 @@ extension NativeTextView {
                 return rect
             }
             revealRect = caretSegmentRect(fallback: revealRect)
-            var frame = revealRect.offsetBy(dx: 0, dy: self.frame.origin.y)
+            var frame = revealRect.offsetBy(dx: self.frame.origin.x + self.textContainerOrigin.x,
+                                           dy: self.frame.origin.y + self.textContainerOrigin.y)
             let visibleTop = cv.bounds.origin.y + insetsTop
             let visibleBottom = cv.bounds.origin.y + cv.bounds.height
             let margin: CGFloat = 24
@@ -434,7 +469,8 @@ extension NativeTextView {
                     PerfTrace.accumulate("revealSettle") { tlm.ensureLayout(for: settleRange) }
                 }
                 revealRect = caretSegmentRect(fallback: revealRect)
-                frame = revealRect.offsetBy(dx: 0, dy: self.frame.origin.y)
+                frame = revealRect.offsetBy(dx: self.frame.origin.x + self.textContainerOrigin.x,
+                                           dy: self.frame.origin.y + self.textContainerOrigin.y)
             }
             let targetY: CGFloat
             if frame.minY < visibleTop {

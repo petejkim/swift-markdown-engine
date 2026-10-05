@@ -359,7 +359,9 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         scrollView.documentView = container
         // Force full-document layout at init so paragraph heights are known
         // upfront; otherwise TextKit 2 viewport layout causes scroll drift.
-        textLayoutManager.ensureLayout(for: textLayoutManager.documentRange)
+        if textView.bounds.width > textView.textContainerInset.width * 2 {
+            textLayoutManager.ensureLayout(for: textLayoutManager.documentRange)
+        }
 
         scrollView.contentView.scroll(to: NSPoint(x: 0, y: -scrollView.contentInsets.top))
         scrollView.clampToInsets()
@@ -380,11 +382,12 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         textView.setPlaceholder(placeholder)
         // Initial reading-column centering; the resize observer below handles later changes.
         if configuration.readingWidth != nil {
-            textView.centerReadingColumn(forClipWidth: scrollView.contentView.bounds.width)
+            textView.synchronizeReadingWidth(forClipWidth: scrollView.contentView.bounds.width)
         }
         scrollView.contentView.postsBoundsChangedNotifications = true
         var lastObservedViewportWidth = scrollView.contentView.bounds.width
-        NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: scrollView.contentView, queue: nil) { _ in
+        context.coordinator.viewportObservers.append(NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: scrollView.contentView, queue: nil) { [weak textView, weak scrollView, weak coordinator = context.coordinator] _ in
+            guard let textView, let scrollView, let coordinator else { return }
             // Refresh code-block overlays only on real viewport width changes, not on TextKit height-only echoes during typing.
             let newWidth = scrollView.contentView.bounds.width
             if abs(newWidth - lastObservedViewportWidth) > 0.5 {
@@ -394,10 +397,10 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
                 // reference) instead of the struct `configuration` captured by value at
                 // makeNSView time — the embedder may change readingWidth between updates.
                 if textView.configuration.readingWidth != nil {
-                    textView.centerReadingColumn(forClipWidth: newWidth)
+                    textView.synchronizeReadingWidth(forClipWidth: newWidth)
                 }
-                context.coordinator.didEnsureLayoutForCurrentDocument = false
-                context.coordinator.updateCodeBlockSelection(textView: textView)
+                coordinator.didEnsureLayoutForCurrentDocument = false
+                coordinator.updateCodeBlockSelection(textView: textView)
             }
             // Only react with overscroll recalc when the viewport itself resizes
             // (window resize). Without this guard, TextKit-induced frame changes echo
@@ -421,16 +424,17 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
             guard abs(container.frame.height - scrollView.contentView.bounds.height) > 1 else { return }
             textView.recalcOverscroll(for: scrollView)
             scrollView.clampToInsets()
-        }
-        NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: scrollView.contentView, queue: nil) { _ in
+        })
+        context.coordinator.viewportObservers.append(NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: scrollView.contentView, queue: nil) { [weak textView, weak scrollView, weak coordinator = context.coordinator] _ in
+            guard let textView, let scrollView, let coordinator else { return }
             textView.ensureVisibleLayout()
-            if context.coordinator.isWritingToolsActive {
-                context.coordinator.fixWritingToolsChildWindowIfNeeded(textView: textView)
+            if coordinator.isWritingToolsActive {
+                coordinator.fixWritingToolsChildWindowIfNeeded(textView: textView)
             }
             scrollView.clampToInsets()
-            context.coordinator.refreshActiveLinkCaretRect()
-            context.coordinator.updateCodeBlockSelection(textView: textView)
-        }
+            coordinator.refreshActiveLinkCaretRect()
+            coordinator.updateCodeBlockSelection(textView: textView)
+        })
         reconcileHeader(textView: textView, context: context)
         onTextViewCreated?(textView)
         return scrollView
@@ -479,6 +483,10 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
             return context.coordinator.isWritingToolsActive
         }()
 
+        // Presentation changes must not rebuild storage from a binding that
+        // intentionally excludes an in-progress input-method composition.
+        if textView.hasMarkedText() { return }
+
         if wtActive && isNodeSwitch {
             // User switched files while Writing Tools was active — discard the
             // WT session so it doesn't overwrite the wrong node.
@@ -493,6 +501,29 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
             // during one are not a supported use case.
             return
         }
+
+        let widthChanged = textView.configuration.readingWidth != configuration.readingWidth
+        if widthChanged {
+            textView.configuration.readingWidth = configuration.readingWidth
+            context.coordinator.configuration.readingWidth = configuration.readingWidth
+            textView.synchronizeReadingWidth(forClipWidth: nsView.contentView.bounds.width)
+        }
+        let previousSpelling = context.coordinator.configuration.spellChecking
+        let spelling = configuration.spellChecking
+        if previousSpelling.continuousSpellChecking != spelling.continuousSpellChecking
+            || previousSpelling.grammarChecking != spelling.grammarChecking
+            || previousSpelling.automaticSpellingCorrection != spelling.automaticSpellingCorrection
+            || previousSpelling.automaticQuoteSubstitution != spelling.automaticQuoteSubstitution {
+            context.coordinator.configuration.spellChecking = spelling
+            textView.configuration.spellChecking = spelling
+            context.coordinator.userPrefersContinuousSpellChecking = spelling.continuousSpellChecking
+            context.coordinator.userPrefersGrammarChecking = spelling.grammarChecking
+            context.coordinator.userPrefersAutomaticSpellingCorrection = spelling.automaticSpellingCorrection
+            context.coordinator.userPrefersAutomaticQuoteSubstitution = spelling.automaticQuoteSubstitution
+            context.coordinator.cachedSpellingDisabled = nil
+            context.coordinator.updateAutocorrectSettings(textView, caretLocation: textView.selectedRange().location)
+        }
+        context.coordinator.onSpellCheckingPolicyChanged = onSpellCheckingPolicyChanged
 
         textView.onPasteImage = onPasteImage
         textView.onImageInput = onImageInput
@@ -827,6 +858,8 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
     /// different screen — and that is the only moment left to record where the
     /// reader was; the coordinator's own offsets die with it.
     public static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
+        coordinator.viewportObservers.forEach(NotificationCenter.default.removeObserver(_:))
+        coordinator.viewportObservers.removeAll()
         // A restore still pending means the reader was never put back where they
         // were — recording the current offset would overwrite the good one with
         // the mid-load position.

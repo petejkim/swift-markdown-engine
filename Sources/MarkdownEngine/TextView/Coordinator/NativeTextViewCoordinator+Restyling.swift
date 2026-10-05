@@ -177,7 +177,9 @@ extension NativeTextViewCoordinator {
             if invalidateLayout {
                 tlm.invalidateLayout(for: tlm.documentRange)
             }
-            tlm.ensureLayout(for: tlm.documentRange)
+            if textView.bounds.width > textView.textContainerInset.width * 2 {
+                tlm.ensureLayout(for: tlm.documentRange)
+            }
         }
 
         // The re-entrant textViewDidChangeSelection was suppressed for this rebuild

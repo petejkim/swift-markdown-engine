@@ -80,6 +80,19 @@ final class NativeTextView: NSTextView {
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
+        if configuration.portableMarkdown {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let coordinator = self.delegate as? NativeTextViewCoordinator else { return }
+                let range = NSRange(location: 0, length: (self.string as NSString).length)
+                // Rendered table colors are resolved when styled; refresh them
+                // under this view's new appearance without replacing source.
+                self.effectiveAppearance.performAsCurrentDrawingAppearance {
+                    coordinator.restyleParagraphs([range], in: self)
+                }
+                self.updateWideTableOverlays()
+                self.needsDisplay = true
+            }
+        }
         // Forward appearance changes to the embedder's highlighter via its registered notification.
         if let name = configuration.services.syntaxHighlighter.appearanceDidChangeNotification {
             NotificationCenter.default.post(name: name, object: self)

@@ -28,6 +28,7 @@ extension NativeTextViewCoordinator {
             return
         }
 
+        guard onCodeBlockSelectionChange != nil else { return }
         let nsText = textView.string as NSString
         let scrollOffset = textView.enclosingScrollView?.contentView.bounds.origin ?? .zero
 
