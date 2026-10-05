@@ -29,9 +29,10 @@ extension NativeTextViewWrapper {
         else { location = min(start + replacement.utf16.count, new.length); length = 0 }
         let scroll = view.enclosingScrollView?.contentView.bounds.origin
         storage.replaceCharacters(in: range, with: replacement)
-        view.setSelectedRange(NSRange(location: location, length: length))
         coordinator.lastSyncedText = source
         coordinator.rebuildTextStorageAndStyle(view, from: source)
+        // The upstream rebuild replaces attributed storage and resets selection.
+        view.setSelectedRange(NSRange(location: location, length: length))
         if let native = view as? NativeTextView, let scroller = view.enclosingScrollView {
             native.recalcOverscroll(for: scroller)
             native.refreshPlaceholderVisibility()
